@@ -76,41 +76,21 @@ func (t *JobInfo) GetTParams() any {
 	return t.TParams
 }
 
-type JobLog struct {
-	ID           uint64       `son:"id"`
-	JobInfoID    uint64       `json:"job_info_id"`
-	JobLogStatus JobLogStatus `json:"job_log_status"`
-	StartAt      *time.Time   `json:"start_at"`
-	EndAt        *time.Time   `json:"end_at"`
-	Message      string       `json:"message"`
-	CreatedAt    *time.Time   `json:"created_at"`
-}
-
-type JobLogStatus string
-
-const (
-	JobLogStatusSuccess JobLogStatus = "success"
-	JobLogStatusFail    JobLogStatus = "fail"
-)
-
 type JobInMemoryRepo struct {
 	mu     sync.RWMutex
 	jobs   map[uint64]*JobInfo
 	nextID uint64
 
-	logs      map[uint64]*JobLog
-	nextLogId uint64
-	logMu     sync.RWMutex
-
 	jobManager *JobManager
+
+	logger CronLogger
 }
 
 func NewJobInMemoryRepo() *JobInMemoryRepo {
 	return &JobInMemoryRepo{
-		jobs:      make(map[uint64]*JobInfo),
-		nextID:    1,
-		logs:      make(map[uint64]*JobLog),
-		nextLogId: 1,
+		jobs:   make(map[uint64]*JobInfo),
+		nextID: 1,
+		logger: newDefaultLogger(),
 	}
 }
 
@@ -180,40 +160,16 @@ func (t *JobInMemoryRepo) GetBySysFuncId(funcId string) (Job, error) {
 }
 
 func (s *JobInMemoryRepo) OnStart(startAt time.Time, job Job) {
-	s.logMu.Lock()
-	defer s.logMu.Unlock()
 	jobInfo := job.(*JobInfo)
-	jobLog := &JobLog{
-		JobInfoID:    jobInfo.ID,
-		JobLogStatus: JobLogStatusSuccess,
-		StartAt:      &startAt,
-		EndAt:        &startAt,
-		Message:      "started",
-	}
-	jobLog.ID = s.nextLogId
-	s.nextLogId++
-	s.logs[s.nextLogId] = jobLog
+	s.logger.Infof("started: job=%d, [%s]", jobInfo.ID, startAt)
 }
 
 func (s *JobInMemoryRepo) OnFail(startAt, endAt time.Time, job Job, err error) {
-	s.logMu.Lock()
-	defer s.logMu.Unlock()
 	jobInfo := job.(*JobInfo)
-	jobLog := &JobLog{
-		JobInfoID:    jobInfo.ID,
-		JobLogStatus: JobLogStatusFail,
-		StartAt:      &startAt,
-		EndAt:        &endAt,
-		Message:      err.Error(),
-	}
-	jobLog.ID = s.nextLogId
-	s.nextLogId++
-	s.logs[s.nextLogId] = jobLog
+	s.logger.Infof("failed: job=%d, [%s, %s]: %s", jobInfo.ID, startAt, endAt, err)
 }
 
 func (s *JobInMemoryRepo) OnSuccess(startAt, endAt time.Time, job Job) {
-	s.logMu.Lock()
-	defer s.logMu.Unlock()
 	jobInfo := job.(*JobInfo)
 
 	var err error
@@ -234,18 +190,9 @@ func (s *JobInMemoryRepo) OnSuccess(startAt, endAt time.Time, job Job) {
 	var msg string
 	err = wrapErrs(errs...)
 	if err != nil {
-		msg = err.Error()
+		msg = ": " + err.Error()
 	}
-	jobLog := &JobLog{
-		JobInfoID:    jobInfo.ID,
-		JobLogStatus: JobLogStatusFail,
-		StartAt:      &startAt,
-		EndAt:        &endAt,
-		Message:      msg,
-	}
-	jobLog.ID = s.nextLogId
-	s.nextLogId++
-	s.logs[s.nextLogId] = jobLog
+	s.logger.Infof("success: job=%d, [%s, %s]%s", jobInfo.ID, startAt, endAt, msg)
 }
 
 // service

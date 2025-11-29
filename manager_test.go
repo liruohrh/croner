@@ -316,7 +316,7 @@ func TestSystemJob(t *testing.T) {
 	require.NoError(t, err)
 
 	repo := manager.jobRepository.(*JobInMemoryRepo)
-	manager.SetListener(&PrintLogListener{})
+	manager.SetListener(repo)
 
 	funcID := "demo_system_job"
 	demoSystemJobFunc := &DemoSystemJobFunc{}
