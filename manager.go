@@ -67,11 +67,11 @@ type Job interface {
 	GetJobUID() string
 	SetJobUID(uid string)
 	GetCronExpr() string
-	IsEnable() bool
 	GetFuncId() string
 	GetParams() string
 	SetParams(params string)
 	GetTParams() any
+	IsEnable() bool
 	IsSystemJob() bool
 }
 
@@ -144,10 +144,17 @@ func (t *JobManager) NextN(expr string, n int) ([]time.Time, error) {
 	return nexts, nil
 }
 
+// RegisterInitSystemJob call this first when init a system job, otherwise call RegisterJob with new or old job
+func (t *JobManager) RegisterInitSystemJob(job Job) error {
+	return t.registerJob(job, true)
+}
 func (t *JobManager) RegisterJob(job Job) error {
+	return t.registerJob(job, false)
+}
+func (t *JobManager) registerJob(job Job, isInitSystemJob bool) error {
 	var err error
-	if job.IsSystemJob() {
-		// replace to persistence job
+	if isInitSystemJob && job.IsSystemJob() {
+		// replace to persistence sys job when init
 		pjob, err := t.jobRepository.GetBySysFuncId(job.GetFuncId())
 		if err != nil {
 			return err
