@@ -79,6 +79,8 @@ type JobRepository interface {
 	UpsertJob(job Job) error
 	OnJobRemoved(job Job) error
 	ListRunnableJobs() ([]Job, error)
+	//GetBySysFuncId no job must return (nil,nil)
+	GetBySysFuncId(id string) (Job, error)
 }
 
 func (t *JobManager) SetJobRepository(repo JobRepository) {
@@ -144,6 +146,16 @@ func (t *JobManager) NextN(expr string, n int) ([]time.Time, error) {
 
 func (t *JobManager) RegisterJob(job Job) error {
 	var err error
+	if job.IsSystemJob() {
+		// replace to persistence job
+		pjob, err := t.jobRepository.GetBySysFuncId(job.GetFuncId())
+		if err != nil {
+			return err
+		}
+		if pjob != nil {
+			job = pjob
+		}
+	}
 	uid := job.GetJobUID()
 	uidV, _ := strconv.ParseInt(uid, 10, 64)
 
