@@ -141,7 +141,7 @@ func TestRegisterJob(t *testing.T) {
 		err := manager.RegisterJob(job)
 		require.NoError(t, err)
 		require.Empty(t, job.GetJobUID())
-		time.Sleep(6 * time.Second)
+		TimeAfterMustNext(manager, job.Expr)
 		require.Equal(t, 0, helloJobFunc.runtimes)
 	})
 
@@ -160,7 +160,7 @@ func TestRegisterJob(t *testing.T) {
 		require.NoError(t, err)
 		require.NotEmpty(t, job.GetJobUID())
 		log.Printf("before 2.4s")
-		time.Sleep(2400 * time.Millisecond)
+		TimeAfterMustNext(manager, job.Expr)
 		log.Printf("after 2.4s")
 		require.Equal(t, 1, helloJobFunc.runtimes)
 		require.Equal(t, "original", helloJobFunc.latestName)
@@ -172,7 +172,7 @@ func TestRegisterJob(t *testing.T) {
 		require.NoError(t, err)
 		require.NotEmpty(t, job.GetJobUID())
 		require.NotEqual(t, oldUID, job.GetJobUID())
-		time.Sleep(3400 * time.Millisecond)
+		TimeAfterMustNext(manager, job.Expr)
 		require.Equal(t, 2, helloJobFunc.runtimes)
 		require.Equal(t, "updated", helloJobFunc.latestName)
 
@@ -180,7 +180,7 @@ func TestRegisterJob(t *testing.T) {
 		err = manager.RegisterJob(job)
 		require.NoError(t, err)
 		require.Empty(t, job.GetJobUID())
-		time.Sleep(3400 * time.Millisecond)
+		TimeAfterMustNext(manager, job.Expr)
 		require.Equal(t, 2, helloJobFunc.runtimes)
 		require.Equal(t, "updated", helloJobFunc.latestName)
 
@@ -188,14 +188,14 @@ func TestRegisterJob(t *testing.T) {
 		err = manager.RegisterJob(job)
 		require.NoError(t, err)
 		require.NotEmpty(t, job.GetJobUID())
-		time.Sleep(3400 * time.Millisecond)
+		TimeAfterMustNext(manager, job.Expr)
 		require.Equal(t, 3, helloJobFunc.runtimes)
 		require.Equal(t, "updated", helloJobFunc.latestName)
 
 		err = manager.RemoveJob(job)
 		require.NoError(t, err)
 		require.Empty(t, job.GetJobUID())
-		time.Sleep(3400 * time.Millisecond)
+		TimeAfterMustNext(manager, job.Expr)
 		require.Equal(t, 3, helloJobFunc.runtimes)
 	})
 }
@@ -273,7 +273,7 @@ func TestJobListener(t *testing.T) {
 		require.NoError(t, err)
 		err = manager.Start()
 		require.NoError(t, err)
-		time.Sleep(2400 * time.Millisecond)
+		TimeAfterMustNext(manager, job.Expr)
 		err = manager.RemoveJob(job)
 		require.NoError(t, err)
 		require.Equal(t, int32(1), atomic.LoadInt32(&listener.startCount))
@@ -302,7 +302,7 @@ func TestJobListener(t *testing.T) {
 		require.NoError(t, err)
 		err = manager.Start()
 		require.NoError(t, err)
-		time.Sleep(2400 * time.Millisecond)
+		TimeAfterMustNext(manager, job.Expr)
 		require.Equal(t, int32(1), atomic.LoadInt32(&listener.startCount))
 		require.Equal(t, int32(0), atomic.LoadInt32(&listener.successCount))
 		require.Equal(t, int32(1), atomic.LoadInt32(&listener.failCount))
@@ -315,6 +315,7 @@ func TestSystemJob(t *testing.T) {
 	err = manager.Start()
 	require.NoError(t, err)
 
+	repo := manager.jobRepository.(*JobInMemoryRepo)
 	manager.SetListener(&PrintLogListener{})
 
 	funcID := "demo_system_job"
@@ -324,57 +325,88 @@ func TestSystemJob(t *testing.T) {
 
 	now := time.Now()
 	jobInfo := &JobInfo{
-		IsSystem:    true,
-		Expr:        "*/3 * * * * *",
-		JobStatus:   JonInfoStatusEnable,
-		FuncID:      funcID,
-		Params:      `{"name": "demo_system_job"}`,
-		Description: "demo system job",
-		InvokeTimes: JobInfoInvokeUnlimit,
-		CreatedAt:   &now,
+		IsSystem:     true,
+		Expr:         "*/3 * * * * *",
+		JobStatus:    JonInfoStatusEnable,
+		FuncID:       funcID,
+		Params:       `{"name": "demo_system_job"}`,
+		Description:  "demo system job",
+		InvokeTimes:  JobInfoInvokeUnlimit,
+		CreatedAt:    &now,
+		IsInitSysJob: true,
 	}
-	err = manager.RegisterJob(jobInfo)
-	require.NoError(t, err)
-	time.Sleep(3400 * time.Millisecond)
-	require.Equal(t, 1, demoSystemJobFunc.runtimes)
+	t.Run("register init", func(t *testing.T) {
+		err = manager.RegisterInitSystemJob(jobInfo)
+		require.NoError(t, err)
+		TimeAfterMustNext(manager, jobInfo.Expr)
+		require.Equal(t, 1, demoSystemJobFunc.runtimes)
+	})
 
-	err = manager.RemoveJob(jobInfo)
-	require.NoError(t, err)
+	t.Run("persistence has priority", func(t *testing.T) {
+		oldJobId := jobInfo.ID
+		oldJobUID := jobInfo.JobUID
+		err = manager.RegisterJob(jobInfo)
+		require.NoError(t, err)
+		jobInfo, err = repo.GetByID(oldJobId)
+		require.NoError(t, err)
+		require.NotEqual(t, oldJobUID, jobInfo.JobUID)
+	})
 
-	repo := manager.jobRepository.(*JobInMemoryRepo)
+	t.Run("remove == disable", func(t *testing.T) {
+		err = manager.RemoveJob(jobInfo)
+		require.NoError(t, err)
+		jobInfo, err = repo.GetByID(jobInfo.ID)
+		require.NoError(t, err)
+		require.Equal(t, JobInfoStatusDisable, jobInfo.JobStatus)
+	})
 
-	jobInfo, err = repo.GetByID(jobInfo.ID)
-	require.NoError(t, err)
-	require.Equal(t, JobInfoStatusDisable, jobInfo.JobStatus)
+	t.Run("can not create", func(t *testing.T) {
+		err = repo.Create(jobInfo)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "system job")
+	})
 
-	err = repo.Create(jobInfo)
-	require.Error(t, err)
-	require.ErrorContains(t, err, "system job")
+	t.Run("only update some fields", func(t *testing.T) {
+		jobInfo.JobStatus = JonInfoStatusEnable
+		jobInfo.InvokeTimes = 20
+		err = repo.Update(jobInfo)
+		TimeAfterMustNext(manager, jobInfo.Expr)
+		require.Equal(t, 2, demoSystemJobFunc.runtimes)
+		jobInfo, err = repo.GetByID(jobInfo.ID)
+		require.NoError(t, err)
+		require.Equal(t, JobInfoInvokeUnlimit, jobInfo.InvokeTimes)
+	})
 
-	jobInfo.JobStatus = JonInfoStatusEnable
-	jobInfo.InvokeTimes = 20
-	err = repo.Update(jobInfo)
-	jobInfo, err = repo.GetByID(jobInfo.ID)
-	require.NoError(t, err)
-	require.Equal(t, JobInfoInvokeUnlimit, jobInfo.InvokeTimes)
-	time.Sleep(3400 * time.Millisecond)
-	require.Equal(t, 2, demoSystemJobFunc.runtimes)
+	t.Run("can not delete", func(t *testing.T) {
+		err = repo.Delete(jobInfo.ID)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "system job")
+	})
 
-	err = repo.Delete(jobInfo.ID)
-	require.Error(t, err)
-	require.ErrorContains(t, err, "system job")
+	t.Run("batch delete == disable", func(t *testing.T) {
+		err = manager.RegisterJob(jobInfo)
+		require.NoError(t, err)
+		oldId := jobInfo.ID
+		jobInfo, err = repo.GetByID(jobInfo.ID)
+		require.NoError(t, err)
+		require.Equal(t, oldId, jobInfo.ID)
+		err = repo.DeleteBatch([]uint64{jobInfo.ID})
+		require.NoError(t, err)
+		jobInfo, err = repo.GetByID(jobInfo.ID)
+		require.NoError(t, err)
+		require.Equal(t, JobInfoStatusDisable, jobInfo.JobStatus)
+	})
+}
 
-	err = manager.RegisterJob(jobInfo)
-	require.NoError(t, err)
-	oldId := jobInfo.ID
-	jobInfo, err = repo.GetByID(jobInfo.ID)
-	require.NoError(t, err)
-	require.Equal(t, oldId, jobInfo.ID)
-	err = repo.DeleteBatch([]uint64{jobInfo.ID})
-	require.NoError(t, err)
-	jobInfo, err = repo.GetByID(jobInfo.ID)
-	require.NoError(t, err)
-	require.Equal(t, JobInfoStatusDisable, jobInfo.JobStatus)
+// 建议3s，然后给1s执行
+func TimeAfterMustNext(manager *JobManager, expr string) {
+	next, err := manager.NextN(expr, 1)
+	if err != nil {
+		panic(err)
+	}
+	<-time.After(time.Until(next[0]))
+	log.Printf("next: %v", next)
+	<-time.After(400 * time.Millisecond)
 }
 
 type DemoSystemJobFunc struct {

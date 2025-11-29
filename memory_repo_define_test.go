@@ -25,7 +25,7 @@ type JobInfo struct {
 	InvokeTimes                  int           `json:"invoke_times"`
 	CreatedAt                    *time.Time    `json:"created_at"`
 	TParams                      any           `gorm:"-" json:"-"`
-	IsDelete                     bool          `gorm:"-" json:"-"`
+	IsDeleteOnRemove             bool          `gorm:"-" json:"-"`
 	IgnorePersistenceOptOnDelete bool          `gorm:"-" json:"-"`
 	IsInitSysJob                 bool          `gorm:"-" json:"-"`
 }
@@ -148,7 +148,7 @@ func (t *JobInMemoryRepo) OnJobRemoved(job Job) error {
 	if jobInfo.IgnorePersistenceOptOnDelete {
 		return nil
 	}
-	if jobInfo.IsDelete && !jobInfo.IsSystem {
+	if jobInfo.IsDeleteOnRemove && !jobInfo.IsSystem {
 		// 系统任务只能禁用
 		return t.deleteById(jobInfo.ID)
 	}
@@ -166,6 +166,17 @@ func (t *JobInMemoryRepo) ListRunnableJobs() ([]Job, error) {
 		}
 	}
 	return runnableJobs, nil
+}
+
+func (t *JobInMemoryRepo) GetBySysFuncId(funcId string) (Job, error) {
+	jobInfo, err := t.getBySysFuncId(funcId)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return jobInfo, nil
 }
 
 func (s *JobInMemoryRepo) OnStart(startAt time.Time, job Job) {
@@ -260,6 +271,7 @@ func (s *JobInMemoryRepo) Update(entity *JobInfo) error {
 		old.JobStatus = entity.JobStatus
 		old.Params = entity.Params
 		old.Description = entity.Description
+		return s.jobManager.RegisterJob(old)
 	}
 	return s.jobManager.RegisterJob(entity)
 }
@@ -272,7 +284,7 @@ func (s *JobInMemoryRepo) Delete(id uint64) error {
 	if old.IsSystem {
 		return fmt.Errorf("can not delete system job")
 	}
-	old.IsDelete = true
+	old.IsDeleteOnRemove = true
 	return s.jobManager.RemoveJob(old)
 }
 
