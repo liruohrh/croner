@@ -11,6 +11,10 @@ import (
 
 var (
 	ErrNotFound = errors.New("not found")
+
+	_ Job           = &JobInfo{}
+	_ JobRepository = &JobInMemoryRepo{}
+	_ JobListener   = &JobInMemoryRepo{}
 )
 
 type JobInfo struct {
