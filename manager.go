@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"strconv"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -63,9 +62,8 @@ type JobListener interface {
 }
 
 type Job interface {
+	// GetJobID must set after upsert or before remove
 	GetJobID() any
-	GetJobUID() string
-	SetJobUID(uid string)
 	GetCronExpr() string
 	GetFuncId() string
 	GetParams() string
@@ -80,7 +78,7 @@ type JobRepository interface {
 	OnJobRemoved(job Job) error
 	ListRunnableJobs() ([]Job, error)
 	//GetBySysFuncId no job must return (nil,nil)
-	GetBySysFuncId(id string) (Job, error)
+	GetBySysFuncId(funcId string) (Job, error)
 }
 
 func (t *JobManager) SetJobRepository(repo JobRepository) {
@@ -104,6 +102,13 @@ func (t *JobManager) Start() error {
 		if err != nil {
 			t.logger.Errorf("start: invalid cron expr: %d/%d, %v %s: %s", i+1, len(jobs), job.GetJobID(), job.GetCronExpr(), err)
 			continue
+		}
+		if job.IsSystemJob() {
+			taskEntry := t.GetByJobId(job.GetJobID())
+			if taskEntry.Valid() {
+				t.logger.Infof("start: skip for system job %s already exists: %d/%d", job.GetFuncId(), i+1, len(jobs))
+				continue
+			}
 		}
 		validJobs = append(validJobs, job)
 	}
@@ -153,6 +158,16 @@ func (t *JobManager) RegisterJob(job Job) error {
 }
 func (t *JobManager) registerJob(job Job, isInitSystemJob bool) error {
 	var err error
+
+	funcId := job.GetFuncId()
+	jobFunc := t.funcRegistry[funcId]
+	if jobFunc == nil {
+		return fmt.Errorf("%w: %s", ErrFuncNotFound, funcId)
+	}
+	if v, ok := jobFunc.(CloneableJobFunc); ok {
+		jobFunc = v.CloneJobFunc()
+	}
+
 	if isInitSystemJob && job.IsSystemJob() {
 		// replace to persistence sys job when init
 		pjob, err := t.jobRepository.GetBySysFuncId(job.GetFuncId())
@@ -162,17 +177,6 @@ func (t *JobManager) registerJob(job Job, isInitSystemJob bool) error {
 		if pjob != nil {
 			job = pjob
 		}
-	}
-	uid := job.GetJobUID()
-	uidV, _ := strconv.ParseInt(uid, 10, 64)
-
-	funcId := job.GetFuncId()
-	jobFunc := t.funcRegistry[funcId]
-	if jobFunc == nil {
-		return fmt.Errorf("%w: %s", ErrFuncNotFound, funcId)
-	}
-	if v, ok := jobFunc.(CloneableJobFunc); ok {
-		jobFunc = v.CloneJobFunc()
 	}
 
 	var tParams any
@@ -222,57 +226,55 @@ func (t *JobManager) registerJob(job Job, isInitSystemJob bool) error {
 			return fmt.Errorf("%w: %s: %w", ErrFuncParams, funcId, err)
 		}
 	}
-	jobImpl := &JobImpl{
-		Manager: t,
-		Job:     job,
-		Func:    jobFunc,
-		Params:  tParams,
-	}
-	var entryID cron.EntryID
-	if job.IsEnable() {
-		entryID, err = t.cronI.AddJob(job.GetCronExpr(), jobImpl)
-		if err != nil {
-			return err
-		}
-		job.SetJobUID(strconv.FormatInt(int64(entryID), 10))
-	} else {
-		job.SetJobUID("")
-	}
+
 	err = t.jobRepository.UpsertJob(job)
 	if err != nil {
-		// remove job added before on fail
-		if job.IsEnable() {
-			t.cronI.Remove(entryID)
-		} else {
-			// reset uid when disable on fail
-			job.SetJobUID(uid)
-		}
 		return err
 	}
 
-	// add job when success
-	if uidV != 0 {
-		taskEntry := t.cronI.Entry(cron.EntryID(uidV))
+	if job.IsEnable() {
+		taskEntry := t.GetByJobId(job.GetJobID())
 		if taskEntry.Valid() {
 			t.cronI.Remove(taskEntry.ID)
 		}
+		jobImpl := &JobImpl{
+			Manager: t,
+			Job:     job,
+			Func:    jobFunc,
+			Params:  tParams,
+		}
+		_, err = t.cronI.AddJob(job.GetCronExpr(), jobImpl)
+		if err != nil {
+			return err
+		}
 	}
+
 	if job.IsSystemJob() {
 		t.systemJobFuncIds[funcId] = struct{}{}
 	}
 	return nil
 }
+func (t *JobManager) GetByJobId(jobId any) cron.Entry {
+	for _, entry := range t.cronI.Entries() {
+		jobImpl, ok := entry.Job.(*JobImpl)
+		if !ok {
+			continue
+		}
+		if jobImpl.Job.GetJobID() == jobId {
+			return entry
+		}
+	}
+	return cron.Entry{}
+}
 
 func (t *JobManager) RemoveJob(job Job) error {
-	uid := job.GetJobUID()
-	job.SetJobUID("")
 	err := t.jobRepository.OnJobRemoved(job)
 	if err != nil {
 		return err
 	}
-	v, _ := strconv.ParseInt(uid, 10, 64)
-	if v != 0 {
-		t.cronI.Remove(cron.EntryID(v))
+	taskEntry := t.GetByJobId(job.GetJobID())
+	if taskEntry.Valid() {
+		t.cronI.Remove(taskEntry.ID)
 	}
 	return err
 }

@@ -44,12 +44,6 @@ const (
 func (t *JobInfo) GetJobID() any {
 	return t.ID
 }
-func (t *JobInfo) GetJobUID() string {
-	return t.JobUID
-}
-func (t *JobInfo) SetJobUID(uid string) {
-	t.JobUID = uid
-}
 func (t *JobInfo) GetCronExpr() string {
 	return t.Expr
 }
