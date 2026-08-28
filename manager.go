@@ -156,6 +156,8 @@ func (t *JobManager) RegisterInitSystemJob(job Job) error {
 func (t *JobManager) RegisterJob(job Job) error {
 	return t.registerJob(job, false)
 }
+
+// registerJob  upsert job and add or remove job from cron
 func (t *JobManager) registerJob(job Job, isInitSystemJob bool) error {
 	var err error
 
@@ -230,6 +232,12 @@ func (t *JobManager) registerJob(job Job, isInitSystemJob bool) error {
 	err = t.jobRepository.UpsertJob(job)
 	if err != nil {
 		return err
+	}
+
+	//  未启用时就移除
+	taskEntry := t.GetByJobId(job.GetJobID())
+	if taskEntry.Valid() {
+		t.cronI.Remove(taskEntry.ID)
 	}
 
 	if job.IsEnable() {
