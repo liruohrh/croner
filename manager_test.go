@@ -140,7 +140,7 @@ func TestRegisterJob(t *testing.T) {
 		}
 		err := manager.RegisterJob(job)
 		require.NoError(t, err)
-		require.Empty(t, job.GetJobUID())
+		require.Nil(t, job.GetJobID())
 		TimeAfterMustNext(manager, job.Expr)
 		require.Equal(t, 0, helloJobFunc.runtimes)
 	})
@@ -158,20 +158,20 @@ func TestRegisterJob(t *testing.T) {
 		}
 		err := manager.RegisterJob(job)
 		require.NoError(t, err)
-		require.NotEmpty(t, job.GetJobUID())
+		require.NotNil(t, job.GetJobID())
 		log.Printf("before 2.4s")
 		TimeAfterMustNext(manager, job.Expr)
 		log.Printf("after 2.4s")
 		require.Equal(t, 1, helloJobFunc.runtimes)
 		require.Equal(t, "original", helloJobFunc.latestName)
 
-		oldUID := job.GetJobUID()
+		oldUID := job.GetJobID()
 		job.Expr = "*/3 * * * * *"
 		job.Params = `{"name": "updated"}`
 		err = manager.RegisterJob(job)
 		require.NoError(t, err)
-		require.NotEmpty(t, job.GetJobUID())
-		require.NotEqual(t, oldUID, job.GetJobUID())
+		require.NotNil(t, job.GetJobID())
+		require.NotEqual(t, oldUID, job.GetJobID())
 		TimeAfterMustNext(manager, job.Expr)
 		require.Equal(t, 2, helloJobFunc.runtimes)
 		require.Equal(t, "updated", helloJobFunc.latestName)
@@ -179,7 +179,7 @@ func TestRegisterJob(t *testing.T) {
 		job.JobStatus = JobInfoStatusDisable
 		err = manager.RegisterJob(job)
 		require.NoError(t, err)
-		require.Empty(t, job.GetJobUID())
+		require.Nil(t, job.GetJobID())
 		TimeAfterMustNext(manager, job.Expr)
 		require.Equal(t, 2, helloJobFunc.runtimes)
 		require.Equal(t, "updated", helloJobFunc.latestName)
@@ -187,14 +187,14 @@ func TestRegisterJob(t *testing.T) {
 		job.JobStatus = JonInfoStatusEnable
 		err = manager.RegisterJob(job)
 		require.NoError(t, err)
-		require.NotEmpty(t, job.GetJobUID())
+		require.NotNil(t, job.GetJobID())
 		TimeAfterMustNext(manager, job.Expr)
 		require.Equal(t, 3, helloJobFunc.runtimes)
 		require.Equal(t, "updated", helloJobFunc.latestName)
 
 		err = manager.RemoveJob(job)
 		require.NoError(t, err)
-		require.Empty(t, job.GetJobUID())
+		require.Nil(t, job.GetJobID())
 		TimeAfterMustNext(manager, job.Expr)
 		require.Equal(t, 3, helloJobFunc.runtimes)
 	})
@@ -220,6 +220,7 @@ func TestRemoveJob(t *testing.T) {
 
 		err = manager.RemoveJob(job)
 		require.NoError(t, err)
+		require.Empty(t, manager.cronI.Entries())
 	})
 
 	t.Run("remove unregistered", func(t *testing.T) {
